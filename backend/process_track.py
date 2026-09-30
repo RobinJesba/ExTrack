@@ -69,7 +69,7 @@ def get_optimal_device(requested_device="auto"):
     if requested_device and requested_device.lower() in ["cuda", "mps", "cpu"]:
         return requested_device.lower()
 
-    env_device = os.environ.get("EXTRACK_DEVICE", os.environ.get("DETRACK_DEVICE", "")).lower()
+    env_device = os.environ.get("EXTRACK_DEVICE", "").lower()
     if env_device in ["cuda", "mps", "cpu"]:
         return env_device
 
@@ -909,6 +909,6 @@ if __name__ == "__main__":
     output_dir_arg = sys.argv[3]
     model_arg = sys.argv[4] if len(sys.argv) > 4 else "BS-Roformer-SW"
     device_arg = sys.argv[5] if len(sys.argv) > 5 else "auto"
-    mode_arg = sys.argv[6] if len(sys.argv) > 6 else os.environ.get("EXTRACK_MODE", os.environ.get("DETRACK_MODE", "fast"))
+    mode_arg = sys.argv[6] if len(sys.argv) > 6 else os.environ.get("EXTRACK_MODE", "fast")
 
     process_track(track_id_arg, input_path_arg, output_dir_arg, model_arg, device_arg, mode_arg)

@@ -7,15 +7,7 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const OLD_DB_PATH = path.join(DATA_DIR, 'detrack.db');
 const DB_PATH = path.join(DATA_DIR, 'extrack.db');
-if (fs.existsSync(OLD_DB_PATH) && !fs.existsSync(DB_PATH)) {
-  try {
-    fs.renameSync(OLD_DB_PATH, DB_PATH);
-  } catch {
-    // Fallback if locked
-  }
-}
 const db = new Database(DB_PATH);
 
 // Optimize SQLite for high-concurrency read/writes with Next.js & Python workers

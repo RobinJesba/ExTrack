@@ -1,6 +1,14 @@
 {
   "name": "extrack",
   "version": "0.1.0",
+  "description": "6-Stem AI Audio Separation & Interactive Rehearsal Studio (BS-RoFormer-SW)",
+  "author": "Robin Jesba",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RobinJesba/ExTrack.git"
+  },
+  "homepage": "https://github.com/RobinJesba/ExTrack#readme",
   "private": true,
   "scripts": {
     "dev": "next dev",
