@@ -1,0 +1,9 @@
+# Python AI dependencies for ExTrack Studio (BS-RoFormer-SW 6-Stem)
+torch>=2.0.0
+torchaudio>=2.0.0
+audio-separator[torch]>=0.47.0
+onnxruntime>=1.20.0
+audioread>=3.0.0
+librosa>=0.10.0
+soundfile>=0.12.0
+numpy>=1.24.0

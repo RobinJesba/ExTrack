@@ -39,3 +39,35 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python venv and data
+.venv/
+backend/.venv/
+__pycache__/
+backend/__pycache__/
+*.py[cod]
+*$py.class
+
+# AI model weights & checkpoints (downloaded automatically at runtime)
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+backend/models/*.ckpt
+backend/models/*.pt
+backend/models/*.pth
+backend/models/*.bin
+backend/models/*.onnx
+
+# Data, media uploads, and databases
+data/
+uploads/
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.db
+*.sqlite
+*.sqlite3
