@@ -613,7 +613,16 @@ def run_ensemble_chord_analysis(harmonic_paths, bass_path, beat_timestamps, dura
 
 def process_track(track_id, input_path, output_dir, model_name="BS-Roformer-SW", device_arg="auto", mode_arg="fast"):
     os.makedirs(output_dir, exist_ok=True)
-    models_dir = os.path.join(os.getcwd(), 'data', 'models')
+    models_dir = os.environ.get("EXTRACK_MODELS_DIR")
+    if not models_dir or not os.path.exists(models_dir):
+        candidates = [
+            os.path.join(os.getcwd(), 'data', 'models'),
+            os.path.join(os.getcwd(), 'backend', 'models'),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models'),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'models'),
+            os.path.join(os.path.expanduser('~'), 'Library', 'Application Support', 'ExTrack', 'models'),
+        ]
+        models_dir = next((c for c in candidates if os.path.exists(c)), os.path.join(os.getcwd(), 'data', 'models'))
     os.makedirs(models_dir, exist_ok=True)
 
     start_time = time.time()
@@ -757,16 +766,14 @@ def process_track(track_id, input_path, output_dir, model_name="BS-Roformer-SW",
                         shutil.move(f_path, dst)
                     break
 
-        # Fallback if any stem missing
-        for s_name, s_path in stems.items():
-            if not os.path.exists(s_path):
-                shutil.copyfile(input_path, s_path)
+        # Verify all stems were generated
+        missing_stems = [s for s in stem_names if not os.path.exists(stems[s])]
+        if missing_stems:
+            raise RuntimeError(f"Separation failed to generate stems: {missing_stems}")
 
     except Exception as e:
-        print(f"BS-RoFormer separation warning: {e}", file=sys.stderr)
-        for s_name in stems:
-            if not os.path.exists(stems[s_name]):
-                shutil.copyfile(input_path, stems[s_name])
+        print(f"BS-RoFormer separation error: {e}", file=sys.stderr)
+        raise RuntimeError(f"AI stem separation failed: {e}")
 
     # Parallel Multi-Threaded Post-Processing:
     # 1. DP Beat Tracking (Drums + Harmonic)
