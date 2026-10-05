@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useEffect, useState, use } from 'react';
+import React, { useEffect, useState, Suspense } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useStudioStore, TrackData } from '@/lib/store/useStudioStore';
+import { trackClient, ProgressMeta } from '@/lib/api/trackClient';
 import { MixerPanel } from '@/components/studio/MixerPanel';
 import { TransportBar } from '@/components/studio/TransportBar';
 import { WaveformLooper } from '@/components/studio/WaveformLooper';
@@ -31,18 +32,9 @@ import {
   Key
 } from 'lucide-react';
 
-interface ProgressMeta {
-  stage?: string;
-  stage_progress?: number;
-  eta?: string;
-  elapsed?: string;
-  speed?: string;
-  processed_audio?: string;
-  device_label?: string;
-}
-
-export default function StudioPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+function StudioContent() {
+  const searchParams = useSearchParams();
+  const id = searchParams.get('id') || '';
   const router = useRouter();
 
   const { loadTrack, track, isLoading, loadingProgress, destroyPlayer, pitchSemitones, playbackRate } = useStudioStore();
@@ -57,21 +49,17 @@ export default function StudioPage({ params }: { params: Promise<{ id: string }>
   const [wasProcessing, setWasProcessing] = useState(false);
   const hasInitiatedFetchRef = React.useRef(false);
 
-  // Fetch track & handle SSE if still processing
+  // Fetch track & handle progress updates if still processing
   useEffect(() => {
-    if (hasInitiatedFetchRef.current) return;
+    if (!id || hasInitiatedFetchRef.current) return;
     hasInitiatedFetchRef.current = true;
 
     const abortController = new AbortController();
-    let sse: EventSource | null = null;
+    let unsubscribeProgress: (() => void) | null = null;
 
     const fetchInitialData = async () => {
       try {
-        const res = await fetch(`/api/tracks/${id}`, { signal: abortController.signal });
-        if (!res.ok) {
-          throw new Error('Track not found');
-        }
-        const data = await res.json();
+        const data = await trackClient.getTrack(id, abortController.signal);
         if (abortController.signal.aborted) return;
         const trk = data.track;
 
@@ -86,31 +74,25 @@ export default function StudioPage({ params }: { params: Promise<{ id: string }>
             } catch {}
           }
 
-          // Subscribe to SSE progress
-          sse = new EventSource(`/api/tracks/${id}/progress`);
-          sse.onmessage = (event) => {
-            try {
-              const payload = JSON.parse(event.data);
-              setProgressPercent(payload.progress);
-              setStatusMessage(payload.status_message);
-              if (payload.meta) {
-                setProgressMeta(payload.meta);
-              }
-
-              if (payload.status === 'COMPLETED') {
-                sse?.close();
-                setProgressPercent(92);
-                // Load stems in background while holding continuous progress
-                fetchInitialData();
-              } else if (payload.status === 'FAILED') {
-                sse?.close();
-                setTrackStatus('FAILED');
-                setStatusMessage('AI stem separation failed.');
-              }
-            } catch {
-              // ignore
+          // Subscribe to real-time progress updates (SSE or Tauri event)
+          unsubscribeProgress = trackClient.subscribeProgress(id, (payload) => {
+            setProgressPercent(payload.progress);
+            setStatusMessage(payload.status_message);
+            if (payload.meta) {
+              setProgressMeta(payload.meta);
             }
-          };
+
+            if (payload.status === 'COMPLETED') {
+              if (unsubscribeProgress) unsubscribeProgress();
+              setProgressPercent(92);
+              // Load stems in background while holding continuous progress
+              fetchInitialData();
+            } else if (payload.status === 'FAILED') {
+              if (unsubscribeProgress) unsubscribeProgress();
+              setTrackStatus('FAILED');
+              setStatusMessage('AI stem separation failed.');
+            }
+          });
         } else if (trk.status === 'COMPLETED') {
           setTrackStatus('COMPLETED');
           if (abortController.signal.aborted) return;
@@ -130,10 +112,26 @@ export default function StudioPage({ params }: { params: Promise<{ id: string }>
 
     return () => {
       abortController.abort();
-      if (sse) sse.close();
+      if (unsubscribeProgress) unsubscribeProgress();
       destroyPlayer();
     };
   }, [id, loadTrack, destroyPlayer]);
+
+  if (!id) {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center p-6">
+        <div className="max-w-md w-full bg-zinc-900 border border-zinc-800 p-8 rounded-3xl text-center flex flex-col items-center gap-4">
+          <AlertCircle className="size-10 text-rose-400" />
+          <h2 className="text-xl font-bold text-white">No Track ID Specified</h2>
+          <p className="text-sm text-zinc-400">Please choose a track from the library.</p>
+          <Link href="/" className={cn(buttonVariants({ variant: "outline" }), "border-zinc-700 text-zinc-200 mt-2")}>
+            <ArrowLeft className="size-4 mr-2" />
+            Return to Library
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   if (trackStatus === 'PROCESSING' || trackStatus === 'PENDING' || (trackStatus === 'COMPLETED' && isLoading && wasProcessing)) {
     const isNewProcessing = trackStatus === 'PROCESSING' || trackStatus === 'PENDING' || wasProcessing;
@@ -415,5 +413,20 @@ export default function StudioPage({ params }: { params: Promise<{ id: string }>
         <TransportBar />
       </div>
     </div>
+  );
+}
+
+export default function StudioPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-zinc-950 text-zinc-400 flex items-center justify-center">
+          <Loader2 className="size-6 text-cyan-400 animate-spin mr-2" />
+          <span>Opening Studio...</span>
+        </div>
+      }
+    >
+      <StudioContent />
+    </Suspense>
   );
 }

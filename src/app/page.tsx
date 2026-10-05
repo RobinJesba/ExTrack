@@ -23,6 +23,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { trackClient, TrackItem, isTauri, checkIsTauri } from '@/lib/api/trackClient';
 
 function YouTubeIcon({ className }: { className?: string }) {
   return (
@@ -30,16 +31,6 @@ function YouTubeIcon({ className }: { className?: string }) {
       <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
     </svg>
   );
-}
-
-interface TrackItem {
-  id: string;
-  title: string;
-  artist: string | null;
-  duration: number;
-  bpm: number;
-  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
-  created_at: string;
 }
 
 export default function HomePage() {
@@ -51,6 +42,7 @@ export default function HomePage() {
   // Import modal state
   const [importTab, setImportTab] = useState<'youtube' | 'file'>('youtube');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [nativeFilePath, setNativeFilePath] = useState<string | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [isFetchingMeta, setIsFetchingMeta] = useState(false);
   const [metaThumbnail, setMetaThumbnail] = useState<string | null>(null);
@@ -58,14 +50,14 @@ export default function HomePage() {
   const [artist, setArtist] = useState('');
   const [separationMode, setSeparationMode] = useState<'fast' | 'quality'>('fast');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(false);
 
   const hasFetchedRef = React.useRef(false);
 
   const fetchTracks = async () => {
     try {
-      const res = await fetch('/api/tracks');
-      const data = await res.json();
-      setTracks(data.tracks || []);
+      const trackList = await trackClient.getTracks();
+      setTracks(trackList);
     } catch (err) {
       console.error('Failed to load tracks:', err);
     } finally {
@@ -74,6 +66,7 @@ export default function HomePage() {
   };
 
   useEffect(() => {
+    setIsDesktop(checkIsTauri());
     if (hasFetchedRef.current) return;
     hasFetchedRef.current = true;
     fetchTracks();
@@ -84,11 +77,25 @@ export default function HomePage() {
       const file = e.target.files[0];
       setSelectedFile(file);
       const baseName = file.name.replace(/\.[^/.]+$/, '');
-      setTitle(baseName);
+      if (!title) setTitle(baseName);
+    }
+  };
+
+  const handleNativeBrowse = async () => {
+    try {
+      const file = await trackClient.openNativeAudioFile();
+      if (file) {
+        setNativeFilePath(file.path);
+        const baseName = file.name.replace(/\.[^/.]+$/, '');
+        if (!title) setTitle(baseName);
+      }
+    } catch (err) {
+      console.error('Failed to open native file dialog:', err);
     }
   };
 
   const metaAbortRef = React.useRef<AbortController | null>(null);
+  const debounceTimerRef = React.useRef<NodeJS.Timeout | null>(null);
 
   const handleFetchYouTubeMeta = async (urlToFetch?: string) => {
     const targetUrl = (urlToFetch || youtubeUrl).trim();
@@ -101,13 +108,7 @@ export default function HomePage() {
 
     setIsFetchingMeta(true);
     try {
-      const res = await fetch('/api/tracks/youtube/info', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl }),
-        signal: metaAbortRef.current.signal
-      });
-      const data = await res.json();
+      const data = await trackClient.getYoutubeInfo(targetUrl, metaAbortRef.current.signal);
       if (data.success) {
         if (data.title && !title) setTitle(data.title);
         if (data.artist && !artist) setArtist(data.artist);
@@ -121,6 +122,17 @@ export default function HomePage() {
     }
   };
 
+  const triggerDebouncedFetchMeta = (url: string) => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    const trimmed = url.trim();
+    if (!trimmed.includes('youtube.com') && !trimmed.includes('youtu.be')) return;
+    debounceTimerRef.current = setTimeout(() => {
+      handleFetchYouTubeMeta(trimmed);
+    }, 400);
+  };
+
   const handleImportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -129,32 +141,59 @@ export default function HomePage() {
       setIsUploading(true);
 
       try {
-        const res = await fetch('/api/tracks/youtube', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            url: youtubeUrl.trim(),
-            title: title || undefined,
-            artist: artist || undefined,
-            model: 'BS-Roformer-SW',
-            device: 'auto',
-            mode: separationMode
-          })
+        const data = await trackClient.importYoutube({
+          url: youtubeUrl.trim(),
+          title: title || undefined,
+          artist: artist || undefined,
+          model: 'BS-Roformer-SW',
+          device: 'auto',
+          mode: separationMode
         });
-        const data = await res.json();
-        if (data.success && data.trackId) {
+        const trackId = data.trackId || (data as any).track_id;
+        if (data.success && trackId) {
           setIsDialogOpen(false);
-          router.push(`/studio/${data.trackId}`);
+          router.push(`/studio?id=${trackId}`);
         } else {
-          alert(data.error || 'Failed to download YouTube audio');
+          alert(data.error ? `YouTube Download Error:\n${data.error}` : 'Failed to download YouTube audio');
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('YouTube import error:', err);
-        alert('Network error while downloading from YouTube');
+        alert(`Error downloading from YouTube: ${err?.message || err}`);
       } finally {
         setIsUploading(false);
       }
     } else {
+      // Desktop Tauri direct local file import
+      if (isDesktop || checkIsTauri()) {
+        if (!nativeFilePath) {
+          alert('Please select an audio file to separate.');
+          return;
+        }
+        setIsUploading(true);
+        try {
+          const data = await trackClient.importLocalFile(
+            nativeFilePath,
+            title || undefined,
+            artist || undefined,
+            separationMode
+          );
+          const trackId = data.trackId || (data as any).track_id;
+          if (data.success && trackId) {
+            setIsDialogOpen(false);
+            router.push(`/studio?id=${trackId}`);
+          } else {
+            alert(data.error || 'Failed to import local file');
+          }
+        } catch (err) {
+          console.error('Local import error:', err);
+          alert('Error importing audio file');
+        } finally {
+          setIsUploading(false);
+        }
+        return;
+      }
+
+      // Standard Web file upload
       if (!selectedFile) return;
       setIsUploading(true);
       const formData = new FormData();
@@ -166,14 +205,10 @@ export default function HomePage() {
       formData.append('mode', separationMode);
 
       try {
-        const res = await fetch('/api/tracks/upload', {
-          method: 'POST',
-          body: formData
-        });
-        const data = await res.json();
+        const data = await trackClient.uploadTrack(formData);
         if (data.success && data.trackId) {
           setIsDialogOpen(false);
-          router.push(`/studio/${data.trackId}`);
+          router.push(`/studio?id=${data.trackId}`);
         }
       } catch (err) {
         console.error('Upload error:', err);
@@ -189,7 +224,7 @@ export default function HomePage() {
     if (!confirm('Are you sure you want to delete this track?')) return;
 
     try {
-      await fetch(`/api/tracks/${trackId}`, { method: 'DELETE' });
+      await trackClient.deleteTrack(trackId);
       fetchTracks();
     } catch (err) {
       console.error('Delete error:', err);
@@ -309,15 +344,11 @@ export default function HomePage() {
                             onChange={(e) => {
                               const val = e.target.value;
                               setYoutubeUrl(val);
-                              if (val.includes('youtube.com') || val.includes('youtu.be')) {
-                                handleFetchYouTubeMeta(val);
-                              }
+                              triggerDebouncedFetchMeta(val);
                             }}
                             onPaste={(e) => {
                               const val = e.clipboardData.getData('text');
-                              if (val.includes('youtube.com') || val.includes('youtu.be')) {
-                                handleFetchYouTubeMeta(val);
-                              }
+                              triggerDebouncedFetchMeta(val);
                             }}
                             placeholder="https://www.youtube.com/watch?v=..."
                             className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-red-500 font-sans box-border"
@@ -344,6 +375,20 @@ export default function HomePage() {
                         </div>
                       )}
                     </div>
+                  ) : (isDesktop || checkIsTauri()) ? (
+                    /* Desktop Native File Browser */
+                    <div
+                      onClick={handleNativeBrowse}
+                      className="w-full flex flex-col items-center justify-center p-6 border-2 border-dashed border-zinc-800 hover:border-cyan-500/50 bg-zinc-900/50 rounded-2xl cursor-pointer transition-colors group box-border text-center"
+                    >
+                      <UploadCloud className="size-10 text-zinc-500 group-hover:text-cyan-400 transition-colors mb-2" />
+                      <span className="text-sm font-medium text-zinc-200">
+                        {nativeFilePath ? (nativeFilePath.split('/').pop() || nativeFilePath) : 'Click to choose audio file from Mac / PC'}
+                      </span>
+                      <span className="text-[11px] text-zinc-500 mt-1 font-mono truncate max-w-full px-2">
+                        {nativeFilePath ? nativeFilePath : 'Direct SSD access • MP3, WAV, FLAC, AAC, M4A, OGG'}
+                      </span>
+                    </div>
                   ) : (
                     /* File Dropzone */
                     <label className="w-full flex flex-col items-center justify-center p-6 border-2 border-dashed border-zinc-800 hover:border-cyan-500/50 bg-zinc-900/50 rounded-2xl cursor-pointer transition-colors group box-border">
@@ -359,7 +404,7 @@ export default function HomePage() {
                         accept="audio/*"
                         onChange={handleFileSelect}
                         className="hidden"
-                        required={importTab === 'file'}
+                        required={importTab === 'file' && !(isDesktop || checkIsTauri())}
                       />
                     </label>
                   )}
@@ -538,10 +583,9 @@ export default function HomePage() {
                 return (
                   <div
                     key={trk.id}
-                    onClick={() => router.push(`/studio/${trk.id}`)}
+                    onClick={() => router.push(`/studio?id=${trk.id}`)}
                     onMouseEnter={() => {
-                      router.prefetch(`/studio/${trk.id}`);
-                      fetch(`/api/tracks/${trk.id}`, { priority: 'low' as RequestPriority }).catch(() => {});
+                      router.prefetch(`/studio?id=${trk.id}`);
                     }}
                     className="group flex flex-col justify-between p-5 rounded-2xl bg-zinc-900/60 border border-zinc-800/70 hover:border-cyan-500/50 hover:bg-zinc-900 transition-all duration-200 shadow-lg hover:shadow-cyan-500/10 cursor-pointer"
                   >

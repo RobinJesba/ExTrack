@@ -6,6 +6,7 @@
 
 import type { SoundTouchNode } from '@soundtouchjs/audio-worklet';
 import { audioBufferToWav } from './wavEncoder';
+import { trackClient } from '../api/trackClient';
 
 export type StemType = 'vocals' | 'drums' | 'bass' | 'other' | 'guitar' | 'piano';
 
@@ -177,20 +178,20 @@ export class StemPlayer {
               }
             }
 
-            // If not cached, fetch via HTTP
+            // If not cached, load via trackClient (native IPC on desktop, fetch on web)
             if (!arrayBuf!) {
-              const res = await fetch(url, { signal });
-              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              arrayBuf = await trackClient.loadAudioBuffer(url, signal);
+              if (signal.aborted || this.isDestroyed) return;
 
-              // Store cloned response into CacheStorage in background
-              if (cacheObj) {
+              // Store cloned response into CacheStorage in background if web
+              if (cacheObj && typeof window !== 'undefined' && !url.startsWith('stems/')) {
                 try {
-                  cacheObj.put(url, res.clone()).catch(() => {});
+                  const blob = new Blob([arrayBuf]);
+                  const resp = new Response(blob);
+                  cacheObj.put(url, resp).catch(() => {});
                 } catch {}
               }
 
-              arrayBuf = await res.arrayBuffer();
-              if (signal.aborted || this.isDestroyed) return;
               stemProgress[type] = 0.75;
               updateCombinedProgress();
             }

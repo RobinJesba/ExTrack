@@ -264,7 +264,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       set({ loadingProgress: percent });
     });
 
-    const beatsFormatted = trackData.beats.map(b => ({
+    const beatsFormatted = (trackData.beats || []).map(b => ({
       timestamp: b.timestamp,
       is_downbeat: Boolean(b.is_downbeat)
     }));
