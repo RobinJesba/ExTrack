@@ -71,3 +71,9 @@ uploads/
 *.db
 *.sqlite
 *.sqlite3
+
+backend/build/
+backend/dist/
+src-tauri/target/
+
+.wayfinder
